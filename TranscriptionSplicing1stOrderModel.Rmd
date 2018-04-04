@@ -1,0 +1,175 @@
+---
+title: "Transcription and Splicing Dynamics"
+author: "Edward Wallace"
+date: "11th January 2017"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup,warning=FALSE,message=FALSE,echo=FALSE}
+## knitr options for report generation
+knitr::opts_chunk$set(warning=FALSE,message=FALSE,echo=FALSE,cache=FALSE,
+                      results="show")
+library(tidyverse)
+library(cowplot)
+
+```
+
+This document uses a simple first-order model of transcription, splicing, and decay, to ask what changes in transcription and splicing rate we could reasonably detect. It concludes that the fraction unspliced should be a good way to detect changes in splicing rate.
+        
+## The model
+
+Pre-mRNA (P) is **transcribed** at rate $\tau$, **spliced** at rate $\sigma$ to mRNA (M), which is then **degraded** at rate $\lambda$. As usual in these models, $\phi$ is used as a placeholder for emptiness - creation or decay.
+
+\[ \phi \xrightarrow{\tau} P \xrightarrow{\sigma} M \xrightarrow{\lambda} \phi
+\]
+
+In differential equations,
+
+\[ \frac{dP}{dt} = \tau - \sigma P \]
+
+\[ \frac{dM}{dt} = \sigma P - \lambda M \]
+
+This model does **not** include degradation of pre-mRNA.
+
+### Simulate from model
+
+Here we simulate using the exact analytical solution of the simple model.
+
+We use $\tau=1$, $\sigma=1$, $\lambda=0.1$. I.E. rate of splicing per pre-mRNA molecule is 10X rate of decay per mRNA.
+
+We start with initial conditions $P=0$, $M=0$, which approximates a perfect 4tU-labeling experiment.
+
+```{r model1}
+sim1 <- function(tau=1, sigma=1, lambda=0.1, P0=0, M0=0,
+                 timevec=seq(0,20,length.out = 2001)) {
+    Ps = tau / sigma
+    Ms = tau / lambda
+    Mfrac = sigma * ( P0 - Ps ) / (lambda - sigma)
+    tibble( timeval = timevec,
+            Pt      = ( P0 - Ps ) * exp( - sigma * timevec ) + Ps,
+            Mt      = Mfrac * exp( - sigma * timevec ) + 
+                ( M0 - Ms - Mfrac ) * exp ( - lambda * timevec ) + 
+                Ms)
+}
+v1 <- sim1()
+
+ggplot(data=v1,aes(x=timeval)) +
+    geom_line(aes(y=Pt,colour="pre-mRNA")) +
+    geom_line(aes(y=Mt,colour="mRNA")) +
+    scale_x_continuous("time (min)",expand=c(0.001,0.001)) + 
+    scale_y_continuous("RNA quantity",limits=c(0,10),expand=c(0.001,0.001)) + 
+    theme_bw()
+```
+
+### Vary transcription and splicing rate
+
+Here with varying $\tau$ and $\sigma$, keeping fixed $\lambda=0.1$.
+
+This shows that the amount of pre-mRNA rapidly converges to the steady-state value of $\tau/\sigma$, and the amount of mRNA more slowly converges to $\tau/\lambda$.
+
+```{r simgrid}
+simgrid <- expand.grid(tau=c(0.5,1,2),sigma=c(0.5,1,2)) %>%
+    group_by(tau,sigma) %>%
+    do(sim1(.$tau[1],.$sigma[1],lambda = 0.1)) %>%
+    mutate(taufac=paste("τ =",tau),
+           sigmafac=paste("σ =",sigma))
+
+ggplot(data=simgrid,aes(x=timeval)) +
+    geom_line(aes(y=Pt,colour="pre-mRNA")) +
+    geom_line(aes(y=Mt,colour="mRNA")) +
+    scale_x_continuous("time (min)",expand=c(0.01,0.01)) + 
+    scale_y_continuous("RNA quantity",expand=c(0.01,0.01)) +
+    facet_grid(sigmafac~taufac) +
+    theme_bw()
+
+```
+
+### Zooming in on initial 5 minutes 
+
+We zoom in on the initial times to see changes from varying transcription and splicing rate. Same curves as above, varying $\tau$ and $\sigma$, keeping fixed $\lambda=0.1$.
+
+```{r simgrid_zoom}
+ggplot(data=simgrid,aes(x=timeval)) +
+    geom_line(aes(y=Pt,colour="pre-mRNA")) +
+    geom_line(aes(y=Mt,colour="mRNA")) +
+    scale_x_continuous("time (min)",expand=c(0.01,0.01),limits=c(0,5)) + 
+    scale_y_continuous("RNA quantity",expand=c(0.01,0.01),limits=c(0,5)) +
+    facet_grid(sigmafac~taufac) +
+    theme_bw()
+```
+
+### The pre-mRNA level alone barely distinguishes splicing rate from transcription rate
+
+```{r simgrid_premRNA,fig.width=5,fig.height=3.5}
+ggplot(data=simgrid %>% dplyr::filter(tau==1),
+       aes(x=timeval,colour=sigma,group=sigma)) +
+    geom_line(aes(y=Pt)) +
+    scale_x_continuous("time (min)",expand=c(0.001,0.001),limits=c(0,5)) + 
+    scale_y_continuous("pre-mRNA level, tau = 1",expand=c(0.001,0.001),limits=c(0,1)) +
+    scale_color_continuous("splice rate σ",low="red",high="black") + 
+    theme_bw()
+
+ggplot(data=simgrid %>% dplyr::filter(sigma==1),
+       aes(x=timeval,colour=tau,group=tau)) +
+    geom_line(aes(y=Pt)) +
+    scale_x_continuous("time (min)",expand=c(0.001,0.001),limits=c(0,5)) + 
+    scale_y_continuous("pre-mRNA level, sigma =1",expand=c(0.001,0.001),limits=c(0,1)) +
+    scale_color_continuous("transcription\n rate τ",low="cyan",high="black") + 
+    theme_bw()
+```
+
+Because changing the splicing rate changes the rate of approach to steady-state, in principle we could detect this with a fast enough time-course.
+
+### Fraction unspliced detects the splicing rate
+
+Again with varying $\tau$ and $\sigma$, keeping fixed $\lambda=0.1$.
+
+In this model, the unspliced/total ratio is **independent** of transcription rate $\tau$.
+
+```{r simgrid_fracspliced,fig.width=5,fig.height=3.5}
+ggplot(data=simgrid %>% dplyr::filter(tau==1),
+       aes(x=timeval,colour=sigma,group=sigma)) +
+    geom_line(aes(y=Pt/(Pt + Mt))) +
+    scale_x_continuous("time (min)",expand=c(0.001,0.001),limits=c(0,5)) + 
+    scale_y_continuous("Fraction unspliced: pre / ( pre + mRNA)",expand=c(0.001,0.001),limits=c(0,1)) +
+    scale_color_continuous("splice rate σ",low="red",high="black") + 
+    theme_bw()
+```
+
+### Fraction unspliced is not very sensitive to changes in mRNA decay rate
+
+Here varying $\sigma$ and $\lambda$, keeping fixed transcription rate $\tau=1$.
+
+```{r decay_fracspliced,fig.width=5,fig.height=3.5}
+simgridl <- expand.grid(tau=1,sigma=c(0.5,1,2),lambda=c(0.05,0.1,0.2)) %>%
+    group_by(sigma,lambda) %>%
+    do(sim1(.$tau[1],.$sigma[1],.$lambda[1])) %>%
+    mutate(#taufac=paste("τ =",tau),
+           sigmafac=paste("σ =",sigma),
+           lambdafac=paste("λ =",lambda))
+
+ggplot(data=simgridl,
+       aes(x=timeval,colour=sigma,linetype=lambdafac,
+           group=interaction(sigma,lambda))) +
+    geom_line(aes(y=Pt/(Pt + Mt))) +
+    scale_x_continuous("time (min)",expand=c(0.001,0.001),limits=c(0,5)) + 
+    scale_y_continuous("Fraction unspliced: pre / ( pre + mRNA)",expand=c(0.001,0.001),limits=c(0,1)) +
+    scale_color_continuous("splice rate σ",low="red",high="black") + 
+    scale_linetype_discrete("decay rate λ") + 
+    theme_bw()
+
+```
+
+## Conclusion
+
+I conclude that the fraction unspliced should be a good measure of splicing rate as opposed to transcription, as long as
+
+  - the first-order model is close enough to reality
+  - background is low (we did not check this directly, yet)
+  - mature mRNA decay rate is much less than splicing rate and does not vary much (2x is ok)
+ 
+Further, this suggests that fraction unspliced is a good proxy **even at steady state**. 4tU-labeling will help to resolve the dynamics, including effects of promoter on transcription and decay rate. 
+ 
